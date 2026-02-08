@@ -1,3 +1,4 @@
+import os from "os"
 import path from "path"
 import { Global } from "../global"
 import z from "zod"
@@ -66,5 +67,22 @@ export namespace Auth {
     const data = await all()
     delete data[key]
     await Bun.write(file, JSON.stringify(data, null, 2), { mode: 0o600 })
+  }
+
+  export async function fromPath(providerID: string, input: string) {
+    const resolved = input
+      .replace(/^~/, os.homedir())
+      .replace(/\$\{(\w+)\}|\$(\w+)/g, (_, a, b) => process.env[a || b] || "")
+    if (!path.isAbsolute(resolved))
+      throw new Error(`auth path must be absolute for provider "${providerID}": ${resolved}`)
+    const data = (await Bun.file(resolved).json()) as Record<string, unknown>
+    const entry = data[providerID]
+    if (!entry) throw new Error(`no auth entry found for provider "${providerID}" in ${resolved}`)
+    return Info.parse(entry)
+  }
+
+  export function getter(providerID: string, authPath?: string) {
+    if (authPath) return () => fromPath(providerID, authPath)
+    return () => get(providerID)
   }
 }

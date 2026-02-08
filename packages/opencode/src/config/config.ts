@@ -970,6 +970,7 @@ export namespace Config {
           }),
         )
         .optional(),
+      source: z.string().optional(),
       options: z
         .object({
           apiKey: z.string().optional(),

@@ -747,16 +747,30 @@ export namespace Provider {
       providers[providerID] = mergeDeep(match, provider)
     }
 
+    function getDerivedProviders(source: string) {
+      const result: string[] = []
+      for (const [id, provider] of configProviders) {
+        if (provider.source === source) result.push(id)
+      }
+      return result
+    }
+
     // extend database from config
     for (const [providerID, provider] of configProviders) {
-      const existing = database[providerID]
+      const base = provider.source ? database[provider.source] : undefined
+      if (provider.source && !base) {
+        log.error("Source provider " + provider.source + " not found for " + providerID)
+      }
+      const existing = database[providerID] ?? base
+      const baseModels = existing?.models ?? {}
+      const models = provider.source ? mapValues(baseModels, (model) => ({ ...model, providerID })) : baseModels
       const parsed: Info = {
         id: providerID,
         name: provider.name ?? existing?.name ?? providerID,
         env: provider.env ?? existing?.env ?? [],
         options: mergeDeep(existing?.options ?? {}, provider.options ?? {}),
         source: "config",
-        models: existing?.models ?? {},
+        models,
       }
 
       for (const [modelID, model] of Object.entries(provider.models ?? {})) {
@@ -913,6 +927,35 @@ export namespace Provider {
         const opts = result.options ?? {}
         const patch: Partial<Info> = providers[providerID] ? { options: opts } : { source: "custom", options: opts }
         mergeProvider(providerID, patch)
+      }
+    }
+
+    for (const plugin of await Plugin.list()) {
+      if (!plugin.auth?.loader) continue
+      for (const id of getDerivedProviders(plugin.auth.provider)) {
+        if (disabled.has(id)) continue
+        const authPath = database[id]?.options?.["auth-path"] as string | undefined
+        const hasAuth = authPath ? true : !!(await Auth.get(id))
+        if (!hasAuth) continue
+        const options = await plugin.auth.loader(Auth.getter(id, authPath) as any, database[id])
+        const opts = options ?? {}
+        const patch: Partial<Info> = providers[id] ? { options: opts } : { source: "custom", options: opts }
+        mergeProvider(id, patch)
+      }
+    }
+
+    for (const [baseLoaderID, fn] of Object.entries(CUSTOM_LOADERS)) {
+      for (const id of getDerivedProviders(baseLoaderID)) {
+        if (disabled.has(id)) continue
+        const data = database[id]
+        if (!data) continue
+        const result = await fn(data)
+        if (result && (result.autoload || providers[id])) {
+          if (result.getModel) modelLoaders[id] = result.getModel
+          const opts = result.options ?? {}
+          const patch: Partial<Info> = providers[id] ? { options: opts } : { source: "custom", options: opts }
+          mergeProvider(id, patch)
+        }
       }
     }
 
